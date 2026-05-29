@@ -3,8 +3,11 @@
 [![CI](https://github.com/neurarch-ai/neurarch-lint/actions/workflows/ci.yml/badge.svg)](https://github.com/neurarch-ai/neurarch-lint/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/neurarch-ai/neurarch-lint.svg?style=social)](https://github.com/neurarch-ai/neurarch-lint/stargazers)
+[![Try Neurarch](https://img.shields.io/badge/Neurarch-try_it-7c3aed)](https://neurarch.com)
 
 Pre-flight structural lint for PyTorch models. Catches the bugs Cursor / Copilot can't see at the text layer, before they cost you a GPU hour.
+
+> **Built by [Neurarch](https://neurarch.com).** Describe a task, an AI agent designs the model, the full 22-rule engine lints it before you train, and you export clean `nn.Module` code you own. This repo is the CI and CLI slice of that engine. **[See what Neurarch does →](https://neurarch.com)**
 
 It runs in CI on every pull request, reads the `.py` files that changed, and blocks (or comments) when it finds a structural defect like an attention layer whose `embed_dim` is not divisible by `num_heads`. No Python install, no model loading, pure pattern analysis.
 
@@ -116,10 +119,16 @@ Every `git commit` that touches a `.py` file now runs the structural lint locall
 - **No shape propagation.** The web app and [neurarch-mcp](https://github.com/neurarch-ai/neurarch-mcp) have the full propagator; this action will gain it in v2 once the TypeScript rule code is bundled to ESM.
 - **No fix suggestions in the comment.** Just the location and the rule.
 
-## Related
+## About Neurarch
 
-- **[neurarch-mcp](https://github.com/neurarch-ai/neurarch-mcp)** gives your AI coding agent (Claude Code, Cursor, ...) structural awareness of a model graph.
-- **[Neurarch](https://neurarch.com)** is the visual editor where you design, lint, train, and export the model. Same rule engine, full propagator.
+[Neurarch](https://neurarch.com) is where the rules in this repo come from. It is a model-design environment built on one idea: your architecture is a **typed graph**, so an AI agent (and a linter) can actually reason about it instead of guessing at text.
+
+- **Describe, then design.** Type the problem ("classify support tickets into 5 categories") or upload a CSV; the agent picks the layers, wires them, and propagates tensor shapes.
+- **Lint before you train.** The full 22-rule engine (this repo is the regex-detectable slice) catches shape mismatches, head-dim bugs, and missing residuals before a GPU bill.
+- **Export and own it.** Clean PyTorch / TensorFlow / ONNX, no runtime dependency on Neurarch.
+- **[neurarch-mcp](https://github.com/neurarch-ai/neurarch-mcp):** the same graph awareness inside Claude Code, Cursor, and other MCP agents.
+
+**[Try Neurarch → neurarch.com](https://neurarch.com)**
 
 ## Contributing
 

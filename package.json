@@ -1,0 +1,40 @@
+{
+  "name": "neurarch-lint",
+  "version": "1.0.0",
+  "description": "Pre-flight structural lint for PyTorch models. Catches attention head_dim divisibility, GQA head ratio, Softmax + CrossEntropyLoss double-apply, and zero-dim layers before training.",
+  "type": "module",
+  "bin": {
+    "neurarch-lint": "lint.mjs"
+  },
+  "files": [
+    "lint.mjs",
+    "action.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "keywords": [
+    "pytorch",
+    "lint",
+    "ci",
+    "github-action",
+    "neural-network",
+    "machine-learning",
+    "static-analysis"
+  ],
+  "author": "neurarch-ai",
+  "license": "MIT",
+  "homepage": "https://neurarch.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/neurarch-ai/neurarch-lint.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,89 @@
+name: 'neurarch-lint'
+description: 'Pre-flight structural lint for PyTorch models. Catches attention head_dim divisibility, GQA head ratio, Softmax + CrossEntropyLoss double-apply, and zero-dim layers before training.'
+author: 'neurarch-ai'
+branding:
+  icon: 'check-circle'
+  color: 'purple'
+
+inputs:
+  paths:
+    description: 'Space-separated list of .py files or directories to lint. Defaults to all changed .py files in the PR.'
+    required: false
+    default: ''
+  fail-on-warn:
+    description: 'Set to "true" to exit non-zero on warnings, not just blockers.'
+    required: false
+    default: 'false'
+  comment-on-pr:
+    description: 'Set to "true" to post findings as a PR comment. Requires pull-requests: write permission on the workflow.'
+    required: false
+    default: 'true'
+
+outputs:
+  findings-count:
+    description: 'Total number of issues found.'
+    value: ${{ steps.lint.outputs.count }}
+  blocking-count:
+    description: 'Number of blocking issues.'
+    value: ${{ steps.lint.outputs.blockers }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve files
+      id: files
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.paths }}" ]; then
+          echo "files=${{ inputs.paths }}" >> $GITHUB_OUTPUT
+        elif [ -n "${{ github.event.pull_request.number }}" ]; then
+          # PR mode: lint files changed in the PR
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          CHANGED=$(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA" -- '*.py' | tr '\n' ' ')
+          echo "files=$CHANGED" >> $GITHUB_OUTPUT
+        else
+          echo "files=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run neurarch-lint
+      id: lint
+      shell: bash
+      run: |
+        FILES="${{ steps.files.outputs.files }}"
+        if [ -z "$FILES" ]; then
+          echo "no_files=true" >> $GITHUB_OUTPUT
+          echo "count=0" >> $GITHUB_OUTPUT
+          echo "blockers=0" >> $GITHUB_OUTPUT
+          echo "neurarch-lint: no .py files to scan."
+          exit 0
+        fi
+        # Run twice: once for human output, once for JSON / markdown so we can
+        # post them downstream.
+        node "${{ github.action_path }}/lint.mjs" $FILES || LINT_EXIT=$?
+        node "${{ github.action_path }}/lint.mjs" --markdown $FILES > /tmp/neurarch-lint.md
+        node "${{ github.action_path }}/lint.mjs" --json $FILES > /tmp/neurarch-lint.json
+        COUNT=$(jq '.findings | length' /tmp/neurarch-lint.json)
+        BLOCKERS=$(jq '[.findings[] | select(.severity=="block")] | length' /tmp/neurarch-lint.json)
+        echo "count=$COUNT" >> $GITHUB_OUTPUT
+        echo "blockers=$BLOCKERS" >> $GITHUB_OUTPUT
+        if [ "${{ inputs.fail-on-warn }}" = "true" ] && [ "$COUNT" -gt 0 ]; then
+          exit 1
+        fi
+        if [ "$BLOCKERS" -gt 0 ]; then
+          exit 1
+        fi
+
+    - name: Comment on PR
+      if: inputs.comment-on-pr == 'true' && github.event.pull_request.number
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const body = fs.readFileSync('/tmp/neurarch-lint.md', 'utf8');
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo:  context.repo.repo,
+            issue_number: context.payload.pull_request.number,
+            body,
+          });

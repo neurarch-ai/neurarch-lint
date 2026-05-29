@@ -1,0 +1,415 @@
+#!/usr/bin/env node
+/**
+ * neurarch-lint v1: regex-based pre-flight structural lint for PyTorch code.
+ *
+ * Scope: catches the highest-value structural bugs (attention head_dim
+ * divisibility, GQA head ratio, Softmax + CrossEntropyLoss co-use) without
+ * needing a real Python AST. The full propagator with shape inference,
+ * residual checks, BN ordering, etc. lives in the web app. Wiring that
+ * into CI requires a TS bundle and is on the roadmap.
+ *
+ * Usage:
+ *   node lint.mjs file1.py file2.py ...           # lint specific files
+ *   node lint.mjs --dir=models                    # lint all .py in a dir
+ *   node lint.mjs --json file.py                  # JSON output (for CI)
+ *
+ * Exit codes:
+ *   0 = no blocking issues
+ *   1 = at least one blocking issue found
+ *   2 = usage error
+ */
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
+// ─── Rule catalogue (mirrors public/rules.html) ──────────────────────────────
+
+/**
+ * Each rule: { id, title, severity, check(content, file) -> Finding[] }
+ * Findings carry { file, line, rule, severity, message }.
+ */
+const RULES = [
+  // R-MHA: attention head_dim divisibility
+  {
+    id: 'head-dim-divisibility',
+    title: 'Attention head_dim divisibility',
+    severity: 'block',
+    check: (content, file) => {
+      const findings = [];
+      // Match nn.MultiheadAttention(embed_dim=..., num_heads=...) across lines.
+      const re = /(?:nn\.)?(?:MultiheadAttention|MultiHeadAttention|SelfAttention|CausalAttention)\s*\(([^)]*)\)/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const args = m[1];
+        const embed = extractKwarg(args, ['embed_dim', 'embedDim', 'hidden_dim', 'd_model', 'dim']);
+        const heads = extractKwarg(args, ['num_heads', 'numHeads', 'n_heads', 'nhead']);
+        if (embed !== null && heads !== null && heads > 0 && embed % heads !== 0) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'head-dim-divisibility',
+            severity: 'block',
+            message: `MultiheadAttention has embed_dim=${embed}, num_heads=${heads}. head_dim would be ${(embed / heads).toFixed(2)} (must be an integer).`,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+
+  // R-GQA: GroupedQueryAttention head ratio
+  {
+    id: 'gqa-head-divisibility',
+    title: 'GQA num_heads / num_kv_heads ratio',
+    severity: 'block',
+    check: (content, file) => {
+      const findings = [];
+      const re = /(?:nn\.)?(?:GroupedQueryAttention|GQA|MultiQueryAttention|MQA)\s*\(([^)]*)\)/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const args = m[1];
+        const heads = extractKwarg(args, ['num_heads', 'numHeads', 'n_heads', 'nhead']);
+        const kvHeads = extractKwarg(args, ['num_kv_heads', 'numKVHeads', 'num_key_value_heads', 'n_kv_heads']);
+        if (heads !== null && kvHeads !== null && kvHeads > 0 && heads % kvHeads !== 0) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'gqa-head-divisibility',
+            severity: 'block',
+            message: `GroupedQueryAttention has num_heads=${heads}, num_kv_heads=${kvHeads}. ${heads} % ${kvHeads} = ${heads % kvHeads}, must be 0.`,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+
+  // R-Softmax-CE: Softmax + CrossEntropyLoss co-use in same file
+  {
+    id: 'softmax-cross-entropy',
+    title: 'Softmax + CrossEntropyLoss double-applied',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      const hasExplicitSoftmax = /\bnn\.Softmax\s*\(/.test(content) || /F\.softmax\s*\(/.test(content);
+      const hasCE = /\bnn\.CrossEntropyLoss\s*\(/.test(content);
+      if (hasExplicitSoftmax && hasCE) {
+        // Approximate the line by finding the first Softmax mention.
+        const m = /\b(?:nn\.Softmax|F\.softmax)\s*\(/.exec(content);
+        findings.push({
+          file,
+          line: m ? lineOf(content, m.index) : 1,
+          rule: 'softmax-cross-entropy',
+          severity: 'warn',
+          message: 'nn.CrossEntropyLoss applies LogSoftmax internally; an explicit Softmax before it double-applies and slows training.',
+        });
+      }
+      return findings;
+    },
+  },
+
+  // R-zero-features: nn.Linear or Conv with zero in/out
+  {
+    id: 'zero-features',
+    title: 'Linear / Conv with zero in or out features',
+    severity: 'block',
+    check: (content, file) => {
+      const findings = [];
+      const re = /(?:nn\.)?(?:Linear|Conv1d|Conv2d|Conv3d)\s*\(([^)]*)\)/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const args = m[1];
+        // First two positional ints, or in_features / out_features kwargs.
+        const positionalNums = args
+          .split(',')
+          .map(s => s.trim())
+          .filter(s => /^\d+$/.test(s))
+          .map(Number);
+        const inF = extractKwarg(args, ['in_features', 'in_channels']) ?? positionalNums[0];
+        const outF = extractKwarg(args, ['out_features', 'out_channels']) ?? positionalNums[1];
+        if ((inF !== undefined && inF !== null && inF === 0) || (outF !== undefined && outF !== null && outF === 0)) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'zero-features',
+            severity: 'block',
+            message: `Linear / Conv layer has a zero dim: in=${inF}, out=${outF}. Will fail at construction.`,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+
+  // R-BN-after-act: BatchNorm / LayerNorm wired right after an activation
+  // in the forward() body. The advisor rule cites Ioffe & Szegedy 2015:
+  // normalization belongs BEFORE the activation.
+  {
+    id: 'bn-after-activation',
+    title: 'BatchNorm / LayerNorm placed after an activation',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      // Build attribute -> class table from the __init__ block.
+      // Patterns like `self.bn1 = nn.BatchNorm2d(...)` or
+      // `self.relu = nn.ReLU(...)`.
+      const attrClass = new Map(); // attr -> 'norm' | 'act'
+      const ACT_CLASSES = /(ReLU|GELU|SiLU|Swish|Mish|LeakyReLU|ELU|SELU|PReLU)/;
+      const NORM_CLASSES = /(BatchNorm|LayerNorm|InstanceNorm|GroupNorm|RMSNorm)/;
+      const attrDefRe = /self\.(\w+)\s*=\s*(?:nn\.)?(\w+)\s*\(/g;
+      let dm;
+      while ((dm = attrDefRe.exec(content)) !== null) {
+        const [, attr, cls] = dm;
+        if (ACT_CLASSES.test(cls)) attrClass.set(attr, 'act');
+        else if (NORM_CLASSES.test(cls)) attrClass.set(attr, 'norm');
+      }
+
+      // Walk forward() lines and look for an activation call directly
+      // followed by a norm call (within 2 lines).
+      const lines = content.split('\n');
+      const forwardIdx = lines.findIndex(l => /\bdef\s+forward\s*\(/.test(l));
+      if (forwardIdx < 0) return findings;
+      let lastKind = null;
+      let lastLine = -1;
+      for (let i = forwardIdx + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*def\s+\w+/.test(line) || /^class\s+/.test(line)) break;
+        // Pick the last self.X call on this line (forward chain).
+        const matches = [...line.matchAll(/self\.(\w+)\s*\(/g)];
+        if (matches.length === 0) continue;
+        // Functional calls F.relu, F.gelu count as activations too.
+        const lastSelfAttr = matches[matches.length - 1][1];
+        const kind = attrClass.get(lastSelfAttr);
+        if (!kind) continue;
+        if (lastKind === 'act' && kind === 'norm' && i - lastLine <= 2) {
+          findings.push({
+            file,
+            line: i + 1,
+            rule: 'bn-after-activation',
+            severity: 'warn',
+            message: `'${lastSelfAttr}' (normalization) follows an activation in forward(). Normalization is meant to stabilize the pre-activation distribution; place it before the activation.`,
+          });
+        }
+        lastKind = kind;
+        lastLine = i;
+      }
+
+      // Also catch F.relu(...) immediately before a self.bn(...) on the
+      // same line: `x = self.bn(F.relu(self.conv(x)))`.
+      const innerRe = /self\.(\w+)\s*\(\s*F\.(?:relu|gelu|silu|swish|tanh)\s*\(/g;
+      let im;
+      while ((im = innerRe.exec(content)) !== null) {
+        const attr = im[1];
+        if (attrClass.get(attr) === 'norm') {
+          findings.push({
+            file,
+            line: lineOf(content, im.index),
+            rule: 'bn-after-activation',
+            severity: 'warn',
+            message: `'${attr}' (normalization) wraps an activation inline. Apply normalization before the activation.`,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+
+  // R-deep-no-residual: >= 8 weight-carrying layers and zero residual /
+  // skip / add merge points. The advisor rule cites He et al. 2015 (ResNet).
+  {
+    id: 'deep-no-residual',
+    title: 'Deep network with no residual connections',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      // Count weight-carrying layer instantiations.
+      const weightRe = /(?:nn\.)?(?:Linear|Conv1d|Conv2d|Conv3d|MultiheadAttention|GroupedQueryAttention)\s*\(/g;
+      const weightCount = (content.match(weightRe) ?? []).length;
+      if (weightCount < 8) return findings;
+
+      // Residual indicators. Conservative: only count when the user is
+      // clearly summing into a previously-named tensor.
+      const RESIDUAL_PATTERNS = [
+        /\bx\s*=\s*x\s*\+\s*\w/,                  // x = x + something
+        /\b\w+\s*\+\s*self\.\w+\s*\(/,            // residual + self.layer(
+        /\btorch\.add\s*\(/,                       // torch.add(x, y)
+        /class\s+\w*(?:Residual|Skip)\w*\s*\(/,    // class FooResidual(nn.Module)
+        /=\s*\w+\s*\+\s*\w+\s*,/,                  // ff_out = x + h ,
+        /\breturn\s+\w+\s*\+\s*\w/,                // return x + h
+      ];
+      const hasResidual = RESIDUAL_PATTERNS.some(p => p.test(content));
+      if (hasResidual) return findings;
+
+      // No residual found. Anchor finding to the first weight-carrying
+      // layer for the PR comment to land somewhere useful.
+      const firstWeight = weightRe.exec(content);
+      findings.push({
+        file,
+        line: firstWeight ? lineOf(content, firstWeight.index) : 1,
+        rule: 'deep-no-residual',
+        severity: 'warn',
+        message: `${weightCount} weight-carrying layers and no residual / skip connection. Gradient signal degrades through depth; consider ResNet-style skips above 8 layers.`,
+      });
+      return findings;
+    },
+  },
+];
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function extractKwarg(args, keys) {
+  for (const k of keys) {
+    const re = new RegExp(`\\b${k}\\s*=\\s*(\\d+)`);
+    const m = re.exec(args);
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
+}
+
+function lineOf(content, offset) {
+  let line = 1;
+  for (let i = 0; i < offset && i < content.length; i++) {
+    if (content[i] === '\n') line++;
+  }
+  return line;
+}
+
+function collectPyFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry.startsWith('.') || entry === 'node_modules' || entry === 'venv' || entry === '__pycache__') continue;
+    const full = join(dir, entry);
+    const s = statSync(full);
+    if (s.isDirectory()) out.push(...collectPyFiles(full));
+    else if (entry.endsWith('.py')) out.push(full);
+  }
+  return out;
+}
+
+export function lintContent(content, filePath = '<inline>') {
+  const findings = [];
+  for (const rule of RULES) {
+    try {
+      findings.push(...rule.check(content, filePath));
+    } catch (e) {
+      findings.push({
+        file: filePath,
+        line: 0,
+        rule: rule.id,
+        severity: 'warn',
+        message: `Rule threw: ${e.message}`,
+      });
+    }
+  }
+  return findings;
+}
+
+export { RULES };
+
+export function lintFile(filePath) {
+  let content;
+  try {
+    content = readFileSync(filePath, 'utf8');
+  } catch (e) {
+    return [{
+      file: filePath,
+      line: 0,
+      rule: 'read-error',
+      severity: 'warn',
+      message: `Could not read file: ${e.message}`,
+    }];
+  }
+  const findings = lintContent(content, filePath);
+  return findings;
+}
+
+// ─── Output formatters ──────────────────────────────────────────────────────
+
+function formatHuman(findings) {
+  if (findings.length === 0) {
+    return 'neurarch-lint: no structural issues found.';
+  }
+  const lines = [`neurarch-lint: ${findings.length} issue${findings.length === 1 ? '' : 's'} found.`, ''];
+  const bySeverity = { block: [], warn: [], info: [] };
+  for (const f of findings) (bySeverity[f.severity] ?? bySeverity.warn).push(f);
+  for (const sev of ['block', 'warn', 'info']) {
+    if (bySeverity[sev].length === 0) continue;
+    const tag = sev === 'block' ? 'BLOCK' : sev === 'warn' ? 'WARN' : 'INFO';
+    for (const f of bySeverity[sev]) {
+      lines.push(`  [${tag}] ${f.file}:${f.line}  ${f.rule}`);
+      lines.push(`         ${f.message}`);
+    }
+  }
+  lines.push('');
+  lines.push('Rule reference: https://neurarch.com/rules.html');
+  return lines.join('\n');
+}
+
+function formatMarkdown(findings) {
+  if (findings.length === 0) {
+    return '### neurarch-lint\n\nNo structural issues found in this PR.';
+  }
+  const lines = [
+    `### neurarch-lint`,
+    '',
+    `Found **${findings.length}** structural issue${findings.length === 1 ? '' : 's'} in this PR:`,
+    '',
+  ];
+  for (const f of findings) {
+    const icon = f.severity === 'block' ? ':no_entry:' : f.severity === 'warn' ? ':warning:' : ':information_source:';
+    lines.push(`${icon} **${f.rule}** (${f.severity})`);
+    lines.push(`  \`${f.file}:${f.line}\``);
+    lines.push(`  ${f.message}`);
+    lines.push('');
+  }
+  lines.push('---');
+  lines.push('Full rule reference: <https://neurarch.com/rules.html>');
+  return lines.join('\n');
+}
+
+// ─── Entry point ────────────────────────────────────────────────────────────
+
+function main() {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+    console.error('Usage: node lint.mjs [--json|--markdown] [--dir=PATH] FILES...');
+    process.exit(2);
+  }
+
+  const wantJson = argv.includes('--json');
+  const wantMarkdown = argv.includes('--markdown');
+  let files = argv.filter(a => !a.startsWith('-') && a.endsWith('.py'));
+
+  for (const a of argv) {
+    if (a.startsWith('--dir=')) {
+      const dir = a.slice('--dir='.length);
+      files.push(...collectPyFiles(dir));
+    }
+  }
+
+  if (files.length === 0) {
+    console.error('neurarch-lint: no .py files to scan.');
+    process.exit(0);
+  }
+
+  const findings = [];
+  for (const f of files) findings.push(...lintFile(f));
+
+  if (wantJson) {
+    console.log(JSON.stringify({ files: files.length, findings }, null, 2));
+  } else if (wantMarkdown) {
+    console.log(formatMarkdown(findings));
+  } else {
+    console.log(formatHuman(findings));
+  }
+
+  const hasBlocker = findings.some(f => f.severity === 'block');
+  process.exit(hasBlocker ? 1 : 0);
+}
+
+// Only run main() when invoked as a script, not when imported as a module.
+import { fileURLToPath } from 'node:url';
+const invokedDirectly =
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (invokedDirectly) {
+  main();
+}

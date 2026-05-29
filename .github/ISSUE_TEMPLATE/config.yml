@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & open-ended discussion
+    url: https://github.com/neurarch-ai/neurarch-lint/discussions
+    about: For "how do I…", design feedback, or "would you accept a rule for X", please use Discussions.
+  - name: 🧠 The Neurarch app
+    url: https://neurarch.com
+    about: The visual editor with the full rule engine, shape propagator, training, and export.
+  - name: 📧 Private / security report
+    url: mailto:neurarch.ai@gmail.com
+    about: For security reports or anything you don't want to discuss publicly.

@@ -1,0 +1,34 @@
+name: ❓ Question
+description: Something about how neurarch-lint works that the README doesn't answer.
+title: "[Question]: "
+labels: ["question", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        - **Open-ended discussion** ("would you accept a rule for…") fits better in [Discussions](https://github.com/neurarch-ai/neurarch-lint/discussions).
+        - **General ML / PyTorch help** is out of scope. This tracker is for the linter.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What are you trying to do, and where are you stuck?
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you've already tried
+      description: README sections you've read, commands you've run.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Final checks
+      options:
+        - label: I searched existing issues / discussions and didn't find an answer.
+          required: true
+        - label: This is about neurarch-lint, not generic ML help.
+          required: true

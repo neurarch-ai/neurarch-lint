@@ -1,0 +1,76 @@
+name: 🐛 Bug report
+description: A rule misfires, the CLI crashes, or the GitHub Action behaves unexpectedly.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! For rule problems, a minimal `.py` snippet that reproduces it is the single most useful thing you can include.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what actually happened? For a false positive / false negative, say which rule and why.
+      placeholder: "head-dim-divisibility flagged embed_dim=384, num_heads=6, but 384/6 = 64 is a valid integer."
+    validations:
+      required: true
+
+  - type: textarea
+    id: snippet
+    attributes:
+      label: Minimal PyTorch snippet
+      description: The smallest `.py` content that reproduces the behaviour.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: How you ran it
+      description: The exact CLI command or the workflow `uses:` block.
+      render: shell
+      placeholder: |
+        node lint.mjs model.py
+        # or:
+        - uses: neurarch-ai/neurarch-lint@v1
+          with: { comment-on-pr: true }
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: How did you invoke it?
+      options:
+        - Local CLI (node lint.mjs)
+        - GitHub Action (uses: neurarch-ai/neurarch-lint)
+        - Other (mention in description)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / ref
+      description: The tag or commit you used (e.g. v1, or a SHA).
+      placeholder: "v1"
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Output of `node --version`. (Action runners use Node 20.)
+      placeholder: "v20.11.0"
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Final checks
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I included a minimal snippet that reproduces the behaviour.
+          required: true

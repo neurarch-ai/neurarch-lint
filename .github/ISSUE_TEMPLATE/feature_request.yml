@@ -1,0 +1,59 @@
+name: 💡 Feature request
+description: Suggest a new rule, flag, output format, or integration.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us the **problem** first. For a new rule, the most useful thing is a real PyTorch bug it would have caught, ideally with a paper or PyTorch-docs reference.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: What bug slipped through, or what does the linter not tell you today?
+      placeholder: "A teammate shipped nn.LayerNorm with the wrong normalized_shape and we only caught it at runtime."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+      description: For a new rule, give the trigger condition and a snippet that should fire. For a flag/output, describe the behaviour.
+    validations:
+      required: true
+
+  - type: input
+    id: reference
+    attributes:
+      label: Reference (for a new rule)
+      description: Paper, PyTorch docs, or issue that justifies the rule.
+      placeholder: "https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html"
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area does this touch?
+      multiple: true
+      options:
+        - New lint rule
+        - Existing rule (false positive / negative)
+        - CLI behaviour or flags
+        - GitHub Action behaviour
+        - Output format (json / markdown / human)
+        - Python AST / parser coverage
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Final checks
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I described the underlying problem, not just my proposed solution.
+          required: true

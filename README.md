@@ -13,6 +13,10 @@ It runs in CI on every pull request, reads the `.py` files that changed, and blo
 ![neurarch-lint commenting on a pull request](docs/pr-comment.png)
 -->
 
+### What ruff / flake8 / mypy won't catch
+
+Style and type linters check syntax and types. They happily pass a model whose attention `embed_dim` isn't divisible by `num_heads`, or that applies `Softmax` right before `CrossEntropyLoss`. neurarch-lint checks the **tensor structure**, the class of bug that only surfaces once you actually run the model (or worse, halfway through training).
+
 ## What it catches (v1)
 
 | Rule | Severity | Trigger |
@@ -92,6 +96,20 @@ Exit codes: `0` clean, `1` blocking issue found, `2` usage error.
 
 (Once published to npm you will also be able to run `npx neurarch-lint file.py`.)
 
+## Use with pre-commit
+
+Catch the bugs at commit time, before they ever reach CI. Add to your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/neurarch-ai/neurarch-lint
+    rev: v1
+    hooks:
+      - id: neurarch-lint
+```
+
+Every `git commit` that touches a `.py` file now runs the structural lint locally. Blocking issues stop the commit; warnings don't.
+
 ## What's not in v1
 
 - **No real Python AST.** The regex catches the canonical class-instantiation form (`nn.MultiheadAttention(embed_dim=..., num_heads=...)`). It misses dynamic construction (`AttentionType(**config)`).
@@ -102,6 +120,10 @@ Exit codes: `0` clean, `1` blocking issue found, `2` usage error.
 
 - **[neurarch-mcp](https://github.com/neurarch-ai/neurarch-mcp)** gives your AI coding agent (Claude Code, Cursor, ...) structural awareness of a model graph.
 - **[Neurarch](https://neurarch.com)** is the visual editor where you design, lint, train, and export the model. Same rule engine, full propagator.
+
+## Contributing
+
+A new rule is a small, self-contained PR. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the 4-step "add a rule" guide, and [good first issues](https://github.com/neurarch-ai/neurarch-lint/labels/good%20first%20issue) to start.
 
 ## Star this repo
 

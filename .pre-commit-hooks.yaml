@@ -1,0 +1,7 @@
+- id: neurarch-lint
+  name: neurarch-lint (PyTorch structural lint)
+  description: Catch attention head_dim / GQA / Softmax+CrossEntropy / zero-dim structural bugs in PyTorch files before commit.
+  entry: neurarch-lint
+  language: node
+  files: \.py$
+  pass_filenames: true

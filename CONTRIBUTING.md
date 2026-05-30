@@ -41,7 +41,7 @@ A good rule is **regex-detectable on the canonical class-instantiation form** an
 
 - Branch, commit, open a PR. Keep it to one rule or one fix.
 - CI runs `npm test` and self-lints a clean fixture; both must stay green.
-- Looking for a starter task? See issues labeled [`good first issue`](https://github.com/neurarch-ai/neurarch-lint/labels/good%20first%20issue).
+- Looking for a starter task? See issues labeled [`good first issue`](https://github.com/neurarch-ai/neurarch-lint/labels/good%20first%20issue), or pick one from the [rule backlog](./docs/RULE_BACKLOG.md) (candidate rules with a fixture sketch and the open precision question for each).
 
 ## Scope
 

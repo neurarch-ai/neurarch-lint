@@ -12,6 +12,8 @@
  *   node lint.mjs file1.py file2.py ...           # lint specific files
  *   node lint.mjs --dir=models                    # lint all .py in a dir
  *   node lint.mjs --json file.py                  # JSON output (for CI)
+ *   node lint.mjs --github file.py                # GitHub Actions annotations
+ *   node lint.mjs --sarif file.py                 # SARIF 2.1.0 (Code Scanning)
  *
  * Exit codes:
  *   0 = no blocking issues
@@ -19,7 +21,7 @@
  *   2 = usage error
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 // ─── Rule catalogue (mirrors public/rules.html) ──────────────────────────────
 
@@ -522,17 +524,105 @@ function formatMarkdown(findings) {
   return lines.join('\n');
 }
 
+// GitHub Actions workflow commands. Each finding becomes an ::error or
+// ::warning annotation so it renders inline on the PR diff and in the Checks
+// summary, with no pull-requests:write permission needed.
+// See: https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions
+function formatGithub(findings) {
+  const lines = [];
+  for (const f of findings) {
+    const cmd = f.severity === 'block' ? 'error' : 'warning';
+    const file = ghProp(f.file);
+    const line = ghProp(String(f.line));
+    const title = ghProp(`neurarch-lint: ${f.rule}`);
+    const message = ghData(f.message);
+    lines.push(`::${cmd} file=${file},line=${line},title=${title}::${message}`);
+  }
+  return lines.join('\n');
+}
+
+// Escape a message body for a workflow command (the part after `::`).
+function ghData(s) {
+  return String(s)
+    .replace(/%/g, '%25')
+    .replace(/\r/g, '%0D')
+    .replace(/\n/g, '%0A');
+}
+
+// Escape a workflow command property (file / line / title). Properties need
+// the data escapes plus `,` and `:`.
+function ghProp(s) {
+  return ghData(s)
+    .replace(/,/g, '%2C')
+    .replace(/:/g, '%3A');
+}
+
+// SARIF 2.1.0 document for upload to GitHub Code Scanning (or any SARIF
+// viewer). The rule list is derived from RULES so it never drifts from the
+// code. See: https://json.schemastore.org/sarif-2.1.0.json
+function formatSarif(findings) {
+  const levelOf = sev => (sev === 'block' ? 'error' : 'warning');
+  const sarif = {
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    version: '2.1.0',
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: 'neurarch-lint',
+            informationUri: 'https://neurarch.com',
+            version: packageVersion(),
+            rules: RULES.map(r => ({
+              id: r.id,
+              name: r.title,
+              shortDescription: { text: r.title },
+              helpUri: 'https://neurarch.com/rules.html',
+            })),
+          },
+        },
+        results: findings.map(f => ({
+          ruleId: f.rule,
+          level: levelOf(f.severity),
+          message: { text: f.message },
+          locations: [
+            {
+              physicalLocation: {
+                artifactLocation: { uri: f.file },
+                region: { startLine: f.line > 0 ? f.line : 1 },
+              },
+            },
+          ],
+        })),
+      },
+    ],
+  };
+  return JSON.stringify(sarif, null, 2);
+}
+
+// Read the version from package.json next to this script. Falls back to
+// '0.0.0' if it cannot be read so SARIF output never crashes the run.
+function packageVersion() {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), 'package.json');
+    return JSON.parse(readFileSync(pkgPath, 'utf8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 // ─── Entry point ────────────────────────────────────────────────────────────
 
 function main() {
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
-    console.error('Usage: node lint.mjs [--json|--markdown] [--dir=PATH] FILES...');
+    console.error('Usage: node lint.mjs [--json|--markdown|--github|--sarif] [--dir=PATH] FILES...');
     process.exit(2);
   }
 
   const wantJson = argv.includes('--json');
   const wantMarkdown = argv.includes('--markdown');
+  const wantGithub = argv.includes('--github');
+  const wantSarif = argv.includes('--sarif');
   let files = argv.filter(a => !a.startsWith('-') && a.endsWith('.py'));
 
   for (const a of argv) {
@@ -554,6 +644,10 @@ function main() {
     console.log(JSON.stringify({ files: files.length, findings }, null, 2));
   } else if (wantMarkdown) {
     console.log(formatMarkdown(findings));
+  } else if (wantGithub) {
+    console.log(formatGithub(findings));
+  } else if (wantSarif) {
+    console.log(formatSarif(findings));
   } else {
     console.log(formatHuman(findings));
   }

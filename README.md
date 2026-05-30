@@ -62,7 +62,7 @@ The two `block` findings fail the check (exit code `1`); the `warn` is informati
 
 The full Neurarch rule set is 22 checks (5 guardrail gates + 17 advisor rules). v1 of this action covers the 10 most regex-detectable ones. The propagator-based checks (full shape mismatch, layer-level GQA introspection) live in the [Neurarch](https://neurarch.com) web app and are on the roadmap for a v2 action that bundles the typed-graph parser.
 
-Full rule catalog: <https://neurarch.com/rules.html>
+Full rationale and fixes for each rule: [docs/RULES.md](docs/RULES.md). Online catalog: <https://neurarch.com/rules.html>
 
 ## Use in a GitHub workflow
 
@@ -113,6 +113,37 @@ By default it lints **only the files changed in the PR**. To lint a fixed path i
 | `findings-count` | Total issues found. |
 | `blocking-count` | Issues with `severity=block`. |
 
+### GitHub Code Scanning (SARIF)
+
+The CLI can emit a [SARIF 2.1.0](https://json.schemastore.org/sarif-2.1.0.json) report and upload it to GitHub Code Scanning, so findings show up in the **Security** tab and inline on the PR diff. This path needs no PR-comment permission, only `security-events: write`:
+
+```yaml
+# .github/workflows/structural-scan.yml
+name: Structural scan
+on:
+  pull_request:
+    paths: ['**/*.py']
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npx neurarch-lint --sarif --dir=. > results.sarif || true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+```
+
+`--dir=.` scans every `.py` file in the repo; pass explicit files (`--sarif a.py b.py`) to scope it. The `|| true` lets the upload run even when a blocking finding sets a non-zero exit code; the findings still surface as Code Scanning alerts. If you want the build to fail on blockers, add the [Action](#use-in-a-github-workflow) (or a plain `npx neurarch-lint --dir=.` step) as a separate gating step.
+
 ## Local use
 
 No install needed, the linter is a single self-contained Node script:
@@ -125,6 +156,10 @@ node lint.mjs --markdown file.py    # PR-comment style
 ```
 
 Exit codes: `0` clean, `1` blocking issue found, `2` usage error.
+
+See [examples/](examples/) for a buggy model and its lint output.
+
+The CLI also has two CI-oriented formats: `--github` emits [GitHub Actions annotations](https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions) (inline PR comments, no permissions needed), and `--sarif` emits a [SARIF 2.1.0](#github-code-scanning-sarif) report for GitHub Code Scanning.
 
 (Once published to npm you will also be able to run `npx neurarch-lint file.py`.)
 

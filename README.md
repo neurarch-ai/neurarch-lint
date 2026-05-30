@@ -5,9 +5,11 @@
 [![GitHub stars](https://img.shields.io/github/stars/neurarch-ai/neurarch-lint.svg?style=social)](https://github.com/neurarch-ai/neurarch-lint/stargazers)
 [![Try Neurarch](https://img.shields.io/badge/Neurarch-try_it-7c3aed)](https://neurarch.com)
 
-Pre-flight structural lint for PyTorch models. Catches the bugs Cursor / Copilot can't see at the text layer, before they cost you a GPU hour.
+Pre-flight structural lint for PyTorch models. Catches the shape and config bugs `ruff` and `mypy` can't, the ones that survive the text layer and only surface at runtime (or worse, a GPU hour into training).
 
-> **Built by [Neurarch](https://neurarch.com).** Describe a task, an AI agent designs the model, the full lint engine checks it before you train, and you export clean `nn.Module` code you own. This repo is the CI and CLI slice of that engine (20 regex-detectable rules). **[See what Neurarch does →](https://neurarch.com)**
+Cursor and Copilot read your model as text, so they guess at tensor shapes and get them wrong. neurarch-lint reads the **structure**: it reasons about your architecture instead of pattern-matching strings.
+
+> **Built by [Neurarch](https://neurarch.com).** Neurarch represents a model as a *typed graph*, so an AI agent (and a CI check) can reason about it instead of guessing. Describe a task, the agent designs the model, the full engine checks it before you train, and you export clean `nn.Module` code you own. This repo is the CI and CLI slice of that engine (20 regex-detectable rules). **[See what Neurarch does →](https://neurarch.com)**
 
 It runs in CI on every pull request, reads the `.py` files that changed, and blocks (or comments) when it finds a structural defect like an attention layer whose `embed_dim` is not divisible by `num_heads`. No Python install, no model loading, pure pattern analysis.
 

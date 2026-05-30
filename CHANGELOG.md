@@ -4,9 +4,15 @@ All notable changes to neurarch-lint are documented here. Format loosely follows
 
 ## [Unreleased]
 
+- 4 new structural rules (14 total): `conv-stride-zero` (block, Conv/Pool `stride=0`), `negative-or-zero-kernel` (block, Conv/Pool `kernel_size` zero or negative), `linear-bias-before-norm` (warn, `bias=True` on a Conv/Linear directly before a `BatchNorm` in an `nn.Sequential`), `embedding-zero-size` (block, `nn.Embedding` with `num_embeddings=0` or `embedding_dim=0`).
+- `--version` / `-v`: prints `neurarch-lint X.Y.Z` and exits 0.
+- `--help` / `-h`: now prints a full usage block (flags, exit codes, rule-reference link) to stdout and exits 0, instead of a one-line usage error. The no-args case stays a usage error (exit 2).
+- Performance / robustness: `collectPyFiles` also skips `.git`, `dist`, `build`, `.venv`, `site-packages`, `.mypy_cache`, `.pytest_cache`, and tolerates unreadable directories instead of crashing the run. Files larger than 2 MB are skipped with an `info` finding rather than read.
+- npm publish readiness: `prepublishOnly` runs the test suite, `pack:check` previews the tarball, and a `.npmignore` keeps fixtures / examples / docs / tests out of the published package (lean 4-file tarball driven by the `files` allowlist).
+- CI: test matrix across Node 18 / 20 / 22, a `dogfood` job that runs the Action's CLI against the examples end-to-end, and a `sarif` job that uploads a SARIF report to Code Scanning (guarded to the canonical repo).
 - `--github` output: GitHub Actions workflow-command annotations (`::error` / `::warning`) so findings render inline on the PR diff and the Checks summary with no PR-comment permission. The Action now emits these alongside the human / markdown / JSON runs.
 - `--sarif` output: SARIF 2.1.0 document for upload to GitHub Code Scanning. The rule list is derived from the `RULES` array so it never drifts.
-- `docs/RULES.md`: full catalog of all 10 rules (rationale, triggering snippet, fix, reference) plus a pointer to the 12 propagator-only rules in the web app.
+- `docs/RULES.md`: full catalog of all 14 rules (rationale, triggering snippet, fix, reference) plus a pointer to the 8 propagator-only rules in the web app.
 - `examples/`: a `buggy_transformer.py` that trips 4 rules, a clean `fixed_transformer.py`, and a README with the real captured lint output.
 - pre-commit hook support (`.pre-commit-hooks.yaml`).
 - `CONTRIBUTING.md` with a 4-step "add a rule" guide.

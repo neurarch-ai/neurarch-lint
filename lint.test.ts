@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lintContent } from './lint.mjs';
+import { lintContent, formatGithub, formatSarif, RULES } from './lint.mjs';
 
 const HERE         = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR  = join(HERE, 'fixtures');
@@ -78,6 +78,28 @@ const FIXTURES: Array<{ file: string; expect: Expect }> = [
     },
   },
   {
+    file: 'rule_conv_stride_zero.py',
+    expect: { expectedRules: ['conv-stride-zero'], exactCount: 1 },
+  },
+  {
+    file: 'rule_negative_kernel.py',
+    expect: { expectedRules: ['negative-or-zero-kernel'], exactCount: 1 },
+  },
+  {
+    file: 'rule_linear_bias_before_norm.py',
+    expect: {
+      expectedRules: ['linear-bias-before-norm'],
+      // The Sequential has a ReLU, but the norm precedes it, so the
+      // forward()-based bn-after-activation rule must stay quiet.
+      forbiddenRules: ['bn-after-activation'],
+      exactCount: 1,
+    },
+  },
+  {
+    file: 'rule_embedding_zero.py',
+    expect: { expectedRules: ['embedding-zero-size'], exactCount: 1 },
+  },
+  {
     file: 'bad_model.py',
     expect: {
       // Aggregate fixture: 4 rules fire together.
@@ -116,6 +138,36 @@ describe('neurarch-lint action: per-rule regression', () => {
       }
     });
   }
+});
+
+describe('neurarch-lint action: output formatters', () => {
+  // A snippet that fires one block (head-dim) and one warn (softmax-no-dim),
+  // so both annotation levels and the escaping path are exercised.
+  const BUGGY = [
+    'import torch.nn as nn',
+    'attn = nn.MultiheadAttention(embed_dim=384, num_heads=5)',
+    'softmax = nn.Softmax()',
+  ].join('\n');
+
+  it('formatGithub emits ::error / ::warning with escaped properties', () => {
+    const findings = lintContent(BUGGY, 'models/encoder.py');
+    const out = formatGithub(findings);
+    expect(out).toContain('::error ');
+    expect(out).toContain('::warning ');
+    // The `:` in `file:line` titles and the path are escaped to %3A.
+    expect(out).toContain('%3A');
+    // Annotations point at the buggy file.
+    expect(out).toContain('file=models/encoder.py');
+  });
+
+  it('formatSarif parses as a 2.1.0 doc with matching rule / result counts', () => {
+    const findings = lintContent(BUGGY, 'models/encoder.py');
+    const doc = JSON.parse(formatSarif(findings));
+    expect(doc.version).toBe('2.1.0');
+    const run = doc.runs[0];
+    expect(run.tool.driver.rules.length).toBe(RULES.length);
+    expect(run.results.length).toBe(findings.length);
+  });
 });
 
 describe('neurarch-lint action: fixture inventory', () => {

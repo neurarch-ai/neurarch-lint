@@ -1,0 +1,13 @@
+# The published tarball is driven by the `files` allowlist in package.json
+# (lint.mjs, action.yml, README.md, LICENSE). This .npmignore is a
+# belt-and-suspenders guard so nothing heavy leaks in if the allowlist drifts.
+fixtures/
+examples/
+docs/
+lint.test.ts
+.github/
+.pre-commit-hooks.yaml
+*.lock
+package-lock.json
+CHANGELOG.md
+CONTRIBUTING.md

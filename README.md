@@ -59,8 +59,12 @@ The two `block` findings fail the check (exit code `1`); the `warn` is informati
 | `sigmoid-bce-with-logits` | warn | `nn.Sigmoid` + `nn.BCEWithLogitsLoss` in the same file. BCEWithLogitsLoss applies sigmoid internally; explicit Sigmoid double-applies. |
 | `dropout-p-range` | block | `nn.Dropout(p=1.0)` (or any `p >= 1` / `p < 0`). `p >= 1` zeros the whole signal; `p` must be in `[0, 1)`. |
 | `softmax-no-dim` | warn | `nn.Softmax()` / `F.softmax(x)` with no explicit `dim`. The implicit dimension is ambiguous and deprecated. |
+| `conv-stride-zero` | block | `nn.Conv2d(..., stride=0)` (or any Conv/Pool). The output-size formula divides by stride, so `stride=0` is a guaranteed runtime error. |
+| `negative-or-zero-kernel` | block | `nn.Conv2d(..., kernel_size=0)` or a negative `kernel_size` (Conv / Pool). `kernel_size` must be a positive integer. |
+| `linear-bias-before-norm` | warn | `nn.Conv2d(..., bias=True)` / `nn.Linear(..., bias=True)` immediately before a `BatchNorm` in an `nn.Sequential`. BatchNorm has its own bias (beta); the layer bias is redundant. |
+| `embedding-zero-size` | block | `nn.Embedding(0, 128)` or `embedding_dim=0`. A zero-row table or zero-width vectors crash or are useless. |
 
-The full Neurarch rule set is 22 checks (5 guardrail gates + 17 advisor rules). v1 of this action covers the 10 most regex-detectable ones. The propagator-based checks (full shape mismatch, layer-level GQA introspection) live in the [Neurarch](https://neurarch.com) web app and are on the roadmap for a v2 action that bundles the typed-graph parser.
+The full Neurarch rule set is 22 checks (5 guardrail gates + 17 advisor rules). v1 of this action covers the 14 most regex-detectable ones. The propagator-based checks (full shape mismatch, layer-level GQA introspection) live in the [Neurarch](https://neurarch.com) web app and are on the roadmap for a v2 action that bundles the typed-graph parser.
 
 Full rationale and fixes for each rule: [docs/RULES.md](docs/RULES.md). Online catalog: <https://neurarch.com/rules.html>
 

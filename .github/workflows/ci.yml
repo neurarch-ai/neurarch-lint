@@ -7,12 +7,48 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm ci
+      - run: npm test
+
+  dogfood:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
-      - run: npm test
-      - name: Self-lint clean fixture (dogfood)
+      # Emit GitHub annotations from the buggy example (a live demo of the
+      # findings on every CI run). || true so the non-zero exit does not fail
+      # the job; the assertions below are the real gate.
+      - name: Annotate the buggy example
+        run: node lint.mjs --github examples/buggy_transformer.py || true
+      - name: Fixed example is clean (exit 0)
+        run: node lint.mjs examples/fixed_transformer.py
+      - name: Clean fixture has zero findings (exit 0)
         run: node lint.mjs fixtures/clean_model.py
+
+  sarif:
+    runs-on: ubuntu-latest
+    # Only on the canonical repo: forks lack the security-events permission.
+    if: github.repository == 'neurarch-ai/neurarch-lint'
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate SARIF for the examples
+        run: node lint.mjs --sarif --dir=examples > results.sarif || true
+      - name: Upload SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

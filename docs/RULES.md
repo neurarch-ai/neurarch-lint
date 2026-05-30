@@ -1,6 +1,6 @@
 # neurarch-lint rule catalog
 
-The ten rules this CLI / Action ships, with the failure mode each one prevents,
+The fourteen rules this CLI / Action ships, with the failure mode each one prevents,
 a minimal triggering snippet, and the fix. The rule ids, severities, and
 messages here are pulled straight from the `RULES` array in `lint.mjs`, so this
 catalog matches the code.
@@ -15,9 +15,13 @@ informational unless you set `fail-on-warn: true` on the Action.
 | [groupnorm-channel-divisibility](#groupnorm-channel-divisibility) | block |
 | [zero-features](#zero-features) | block |
 | [dropout-p-range](#dropout-p-range) | block |
+| [conv-stride-zero](#conv-stride-zero) | block |
+| [negative-or-zero-kernel](#negative-or-zero-kernel) | block |
+| [embedding-zero-size](#embedding-zero-size) | block |
 | [softmax-cross-entropy](#softmax-cross-entropy) | warn |
 | [sigmoid-bce-with-logits](#sigmoid-bce-with-logits) | warn |
 | [softmax-no-dim](#softmax-no-dim) | warn |
+| [linear-bias-before-norm](#linear-bias-before-norm) | warn |
 | [bn-after-activation](#bn-after-activation) | warn |
 | [deep-no-residual](#deep-no-residual) | warn |
 
@@ -158,6 +162,85 @@ drop = nn.Dropout(p=0.5)
 
 ---
 
+## conv-stride-zero
+
+**Severity:** block
+
+Convolution and pooling layers compute their output size with a formula that
+divides by `stride`. A `stride=0` therefore divides by zero and is a guaranteed
+runtime error, not a slow degradation. It usually slips in when a stride is
+computed from a config value that collapsed to zero.
+
+```python
+import torch.nn as nn
+
+# stride=0 divides by zero in the output-size formula.
+conv = nn.Conv2d(3, 16, kernel_size=3, stride=0)
+```
+
+**Fix:** use a stride of at least 1 (the default is usually 1 for convs, the
+kernel size for pools).
+
+```python
+conv = nn.Conv2d(3, 16, kernel_size=3, stride=1)
+```
+
+**Reference:** PyTorch [`nn.Conv2d`](https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html) output-size formula divides by `stride`.
+
+---
+
+## negative-or-zero-kernel
+
+**Severity:** block
+
+The `kernel_size` of a convolution or pooling layer is the size of the sliding
+window and must be a positive integer. A `kernel_size=0` (or a negative value)
+describes no window at all and fails at construction.
+
+```python
+import torch.nn as nn
+
+# kernel_size=0 is not a valid window.
+conv = nn.Conv2d(3, 16, kernel_size=0)
+```
+
+**Fix:** use a positive `kernel_size` (1, 3, 5, ... are typical).
+
+```python
+conv = nn.Conv2d(3, 16, kernel_size=3)
+```
+
+**Reference:** PyTorch [`nn.Conv2d`](https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html) / pooling layers require a positive `kernel_size`.
+
+---
+
+## embedding-zero-size
+
+**Severity:** block
+
+`nn.Embedding` builds a lookup table of shape `(num_embeddings, embedding_dim)`.
+A `num_embeddings=0` makes a zero-row table (no token can be looked up) and an
+`embedding_dim=0` makes zero-width vectors. Both are useless and crash or
+produce empty tensors. This mirrors `zero-features` for the embedding table.
+
+```python
+import torch.nn as nn
+
+# Zero-row table: there is no vocabulary to index into.
+embed = nn.Embedding(num_embeddings=0, embedding_dim=128)
+```
+
+**Fix:** set `num_embeddings` to the real vocabulary size and `embedding_dim` to
+a positive width.
+
+```python
+embed = nn.Embedding(num_embeddings=30000, embedding_dim=128)
+```
+
+**Reference:** PyTorch [`nn.Embedding`](https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html) requires a positive table size and vector width.
+
+---
+
 ## softmax-cross-entropy
 
 **Severity:** warn
@@ -261,6 +344,42 @@ softmax = nn.Softmax(dim=-1)
 
 ---
 
+## linear-bias-before-norm
+
+**Severity:** warn
+
+A `BatchNorm` layer learns its own shift parameter (beta), so any bias on the
+`Conv` or `Linear` immediately before it is redundant: the normalization
+subtracts the running mean and then re-adds beta, which cancels the upstream
+bias. The extra bias just wastes parameters and a little compute. This rule is
+deliberately conservative and only fires on the explicit `nn.Sequential(...)`
+adjacency, where a `Conv` / `Linear` with `bias=True` is directly followed by a
+`BatchNormXd`, to avoid false positives.
+
+```python
+import torch.nn as nn
+
+block = nn.Sequential(
+    nn.Conv2d(3, 16, kernel_size=3, bias=True),  # redundant bias
+    nn.BatchNorm2d(16),
+    nn.ReLU(),
+)
+```
+
+**Fix:** set `bias=False` on the layer that feeds the BatchNorm.
+
+```python
+block = nn.Sequential(
+    nn.Conv2d(3, 16, kernel_size=3, bias=False),
+    nn.BatchNorm2d(16),
+    nn.ReLU(),
+)
+```
+
+**Reference:** the BatchNorm beta absorbs an upstream bias; see PyTorch [`nn.BatchNorm2d`](https://pytorch.org/docs/stable/generated/torch.nn.BatchNorm2d.html) and common ResNet implementations that set `bias=False` before norm.
+
+---
+
 ## bn-after-activation
 
 **Severity:** warn
@@ -344,10 +463,10 @@ ResNet / pre-norm Transformer style that carries skips by construction.
 
 ---
 
-## The other 12 rules
+## The other 8 rules
 
-The full Neurarch engine ships **22 rules**. The 10 above are the ones that are
-reliably detectable from text with regex. The remaining 12 need the typed graph
+The full Neurarch engine ships **22 rules**. The 14 above are the ones that are
+reliably detectable from text with regex. The remaining 8 need the typed graph
 and the shape propagator and run in the Neurarch web app:
 
 - full shape-mismatch detection across the whole graph,

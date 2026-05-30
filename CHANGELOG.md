@@ -4,6 +4,7 @@ All notable changes to neurarch-lint are documented here. Format loosely follows
 
 ## [Unreleased]
 
+- 6 new structural rules (20 total): `bceloss-without-sigmoid` (warn, `nn.BCELoss` with no `Sigmoid` in the file, raw logits fed to a probability loss), `log-then-softmax` (warn, numerically unstable `torch.log(F.softmax(...))` / `F.softmax(...).log()`, use `F.log_softmax`), `view-after-transpose` (warn, `.view()` chained on a non-contiguous `.transpose(...)` / `.permute(...)` result, use `.reshape()`), `scheduler-step-before-optimizer` (warn, `scheduler.step()` on an earlier line than the first `optimizer.step()`), `relu-then-softmax` (warn, `ReLU` directly before `Softmax` / `LogSoftmax` in an `nn.Sequential`, clamps logits non-negative), `conv-padding-negative` (block, Conv/Pool with negative `padding`).
 - 4 new structural rules (14 total): `conv-stride-zero` (block, Conv/Pool `stride=0`), `negative-or-zero-kernel` (block, Conv/Pool `kernel_size` zero or negative), `linear-bias-before-norm` (warn, `bias=True` on a Conv/Linear directly before a `BatchNorm` in an `nn.Sequential`), `embedding-zero-size` (block, `nn.Embedding` with `num_embeddings=0` or `embedding_dim=0`).
 - `--version` / `-v`: prints `neurarch-lint X.Y.Z` and exits 0.
 - `--help` / `-h`: now prints a full usage block (flags, exit codes, rule-reference link) to stdout and exits 0, instead of a one-line usage error. The no-args case stays a usage error (exit 2).

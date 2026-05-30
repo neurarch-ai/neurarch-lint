@@ -7,7 +7,7 @@
 
 Pre-flight structural lint for PyTorch models. Catches the bugs Cursor / Copilot can't see at the text layer, before they cost you a GPU hour.
 
-> **Built by [Neurarch](https://neurarch.com).** Describe a task, an AI agent designs the model, the full 22-rule engine lints it before you train, and you export clean `nn.Module` code you own. This repo is the CI and CLI slice of that engine. **[See what Neurarch does →](https://neurarch.com)**
+> **Built by [Neurarch](https://neurarch.com).** Describe a task, an AI agent designs the model, the full lint engine checks it before you train, and you export clean `nn.Module` code you own. This repo is the CI and CLI slice of that engine (20 regex-detectable rules). **[See what Neurarch does →](https://neurarch.com)**
 
 It runs in CI on every pull request, reads the `.py` files that changed, and blocks (or comments) when it finds a structural defect like an attention layer whose `embed_dim` is not divisible by `num_heads`. No Python install, no model loading, pure pattern analysis.
 
@@ -45,6 +45,23 @@ When the action finds something, it posts a comment like this on the pull reques
 
 The two `block` findings fail the check (exit code `1`); the `warn` is informational unless you set `fail-on-warn: true`.
 
+And here is the kind of bug it blocks. The two snippets below are from [`examples/buggy_transformer.py`](examples/buggy_transformer.py) (left) and [`examples/fixed_transformer.py`](examples/fixed_transformer.py) (right). `ruff`, `flake8`, and `mypy` all pass the left; it imports cleanly and only crashes once you build the module on a GPU. The fix is a single character (`6` to `8`).
+
+```python
+# BLOCKED  (examples/buggy_transformer.py)        # PASSES  (examples/fixed_transformer.py)
+class EncoderBlock(nn.Module):                     class EncoderBlock(nn.Module):
+    def __init__(self, dim=400, num_heads=6):          def __init__(self, dim=400, num_heads=8):
+        super().__init__()                                 super().__init__()
+        # head_dim 400 / 6 = 66.67 (not int)               # head_dim 400 / 8 = 50 (int)
+        self.attn = nn.MultiheadAttention(                 self.attn = nn.MultiheadAttention(
+            embed_dim=400, num_heads=6)                        embed_dim=400, num_heads=8)
+        # 400 not divisible by 6 groups                    # 400 divisible by 8 groups
+        self.norm = nn.GroupNorm(                          self.norm = nn.GroupNorm(
+            num_groups=6, num_channels=400)                    num_groups=8, num_channels=400)
+```
+
+The linter blocks the left at `head-dim-divisibility` and `groupnorm-channel-divisibility`; the right lints clean (0 findings, exit `0`).
+
 ## What it catches (v1)
 
 | Rule | Severity | Trigger |
@@ -63,8 +80,14 @@ The two `block` findings fail the check (exit code `1`); the `warn` is informati
 | `negative-or-zero-kernel` | block | `nn.Conv2d(..., kernel_size=0)` or a negative `kernel_size` (Conv / Pool). `kernel_size` must be a positive integer. |
 | `linear-bias-before-norm` | warn | `nn.Conv2d(..., bias=True)` / `nn.Linear(..., bias=True)` immediately before a `BatchNorm` in an `nn.Sequential`. BatchNorm has its own bias (beta); the layer bias is redundant. |
 | `embedding-zero-size` | block | `nn.Embedding(0, 128)` or `embedding_dim=0`. A zero-row table or zero-width vectors crash or are useless. |
+| `bceloss-without-sigmoid` | warn | `nn.BCELoss` with no `Sigmoid` anywhere in the file. BCELoss expects probabilities in `[0, 1]`; raw logits make the loss wrong (it can go negative). Add a Sigmoid or switch to `BCEWithLogitsLoss`. |
+| `log-then-softmax` | warn | `torch.log(F.softmax(x))` or `F.softmax(x).log()`. Computing `log(softmax(x))` directly is numerically unstable; use `F.log_softmax`. |
+| `view-after-transpose` | warn | `x.transpose(1, 2).view(...)` / `x.permute(...).view(...)`. The tensor is non-contiguous after transpose/permute, so `.view()` raises at runtime; use `.reshape()`. |
+| `scheduler-step-before-optimizer` | warn | `scheduler.step()` on an earlier line than the first `optimizer.step()`. Stepping the scheduler first skips the initial learning rate (PyTorch warns about this). |
+| `relu-then-softmax` | warn | `nn.ReLU()` directly before `nn.Softmax` / `nn.LogSoftmax` in an `nn.Sequential`. ReLU clamps logits to non-negative and distorts the output distribution. |
+| `conv-padding-negative` | block | `nn.Conv2d(..., padding=-1)` (or any Conv/Pool). Negative padding is invalid and raises at construction. |
 
-The full Neurarch rule set is 22 checks (5 guardrail gates + 17 advisor rules). v1 of this action covers the 14 most regex-detectable ones. The propagator-based checks (full shape mismatch, layer-level GQA introspection) live in the [Neurarch](https://neurarch.com) web app and are on the roadmap for a v2 action that bundles the typed-graph parser.
+This CLI / Action ships **20 regex-detectable structural rules**. The full [Neurarch](https://neurarch.com) web app adds propagator-based checks that need the typed architecture graph (whole-graph shape-mismatch detection, parameter-explosion estimates, cycle and orphan detection, layer-level GQA introspection). Those cannot be expressed as a text regex and run inside the app; a v2 action that bundles the typed-graph parser is on the roadmap.
 
 Full rationale and fixes for each rule: [docs/RULES.md](docs/RULES.md). Online catalog: <https://neurarch.com/rules.html>
 
@@ -192,7 +215,7 @@ Every `git commit` that touches a `.py` file now runs the structural lint locall
 [Neurarch](https://neurarch.com) is where the rules in this repo come from. It is a model-design environment built on one idea: your architecture is a **typed graph**, so an AI agent (and a linter) can actually reason about it instead of guessing at text.
 
 - **Describe, then design.** Type the problem ("classify support tickets into 5 categories") or upload a CSV; the agent picks the layers, wires them, and propagates tensor shapes.
-- **Lint before you train.** The full 22-rule engine (this repo is the regex-detectable slice) catches shape mismatches, head-dim bugs, and missing residuals before a GPU bill.
+- **Lint before you train.** The full engine (this repo is the 20-rule regex-detectable slice) catches shape mismatches, head-dim bugs, and missing residuals before a GPU bill.
 - **Export and own it.** Clean PyTorch / TensorFlow / ONNX, no runtime dependency on Neurarch.
 - **[neurarch-mcp](https://github.com/neurarch-ai/neurarch-mcp):** the same graph awareness inside Claude Code, Cursor, and other MCP agents.
 

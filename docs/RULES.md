@@ -1,6 +1,6 @@
 # neurarch-lint rule catalog
 
-The fourteen rules this CLI / Action ships, with the failure mode each one prevents,
+The twenty rules this CLI / Action ships, with the failure mode each one prevents,
 a minimal triggering snippet, and the fix. The rule ids, severities, and
 messages here are pulled straight from the `RULES` array in `lint.mjs`, so this
 catalog matches the code.
@@ -18,11 +18,17 @@ informational unless you set `fail-on-warn: true` on the Action.
 | [conv-stride-zero](#conv-stride-zero) | block |
 | [negative-or-zero-kernel](#negative-or-zero-kernel) | block |
 | [embedding-zero-size](#embedding-zero-size) | block |
+| [conv-padding-negative](#conv-padding-negative) | block |
 | [softmax-cross-entropy](#softmax-cross-entropy) | warn |
 | [sigmoid-bce-with-logits](#sigmoid-bce-with-logits) | warn |
+| [bceloss-without-sigmoid](#bceloss-without-sigmoid) | warn |
 | [softmax-no-dim](#softmax-no-dim) | warn |
+| [log-then-softmax](#log-then-softmax) | warn |
 | [linear-bias-before-norm](#linear-bias-before-norm) | warn |
 | [bn-after-activation](#bn-after-activation) | warn |
+| [relu-then-softmax](#relu-then-softmax) | warn |
+| [view-after-transpose](#view-after-transpose) | warn |
+| [scheduler-step-before-optimizer](#scheduler-step-before-optimizer) | warn |
 | [deep-no-residual](#deep-no-residual) | warn |
 
 ---
@@ -463,11 +469,202 @@ ResNet / pre-norm Transformer style that carries skips by construction.
 
 ---
 
-## The other 8 rules
+## conv-padding-negative
 
-The full Neurarch engine ships **22 rules**. The 14 above are the ones that are
-reliably detectable from text with regex. The remaining 8 need the typed graph
-and the shape propagator and run in the Neurarch web app:
+**Severity:** block
+
+Convolution and pooling layers take a non-negative `padding` (the number of
+implicit border elements added on each side). A negative `padding` describes
+removing border elements, which is not a valid construction argument, and
+PyTorch raises at construction. It is the padding sibling of `conv-stride-zero`
+and `negative-or-zero-kernel`, and usually slips in when the padding is computed
+(`pad = (k - 1) // 2 - drop`) and the arithmetic goes below zero.
+
+```python
+import torch.nn as nn
+
+# padding=-1 is rejected at construction.
+conv = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=-1)
+```
+
+**Fix:** use a padding of zero or more (for a kernel of 3 with `stride=1`,
+`padding=1` keeps the spatial size).
+
+```python
+conv = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1)
+```
+
+**Reference:** PyTorch [`nn.Conv2d`](https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html) / pooling layers require `padding >= 0`.
+
+---
+
+## bceloss-without-sigmoid
+
+**Severity:** warn
+
+`nn.BCELoss` is the binary cross-entropy of a **probability** against a target,
+so its input must already be in `[0, 1]` (the output of a sigmoid). When a file
+uses `nn.BCELoss` but has no `Sigmoid` (`nn.Sigmoid` / `torch.sigmoid` /
+`F.sigmoid`) anywhere, the model is almost certainly feeding raw logits into the
+loss. The cross-entropy of a value outside `[0, 1]` is mathematically wrong and
+the loss can even go negative, so training silently optimizes the wrong
+objective. This is the complement of `sigmoid-bce-with-logits` (sigmoid + the
+fused `BCEWithLogitsLoss`); here a sigmoid is missing rather than doubled.
+
+```python
+import torch.nn as nn
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc = nn.Linear(128, 1)
+
+    def forward(self, x):
+        return self.fc(x)          # raw logits, not probabilities
+
+loss_fn = nn.BCELoss()             # expects probabilities in [0, 1]
+```
+
+**Fix:** either add a `Sigmoid` before the loss so the input is a probability,
+or (preferred, more numerically stable) keep the raw logits and switch to
+`nn.BCEWithLogitsLoss`, which fuses the sigmoid in.
+
+```python
+loss_fn = nn.BCEWithLogitsLoss()   # consumes raw logits directly
+```
+
+**Reference:** PyTorch [`nn.BCELoss`](https://pytorch.org/docs/stable/generated/torch.nn.BCELoss.html) documents that the input must be a probability in `[0, 1]`.
+
+---
+
+## log-then-softmax
+
+**Severity:** warn
+
+Computing `log(softmax(x))` in two separate steps is numerically unstable: the
+softmax can underflow to zero for large negative logits, and the following `log`
+then returns `-inf`, which poisons the gradient. `F.log_softmax` computes the
+same quantity in one fused, numerically stable pass (it never materializes the
+tiny intermediate probabilities). This rule flags the explicit composed forms
+`torch.log(F.softmax(...))` and `F.softmax(...).log()`.
+
+```python
+import torch
+import torch.nn.functional as F
+
+# Underflows for confident logits, then log() returns -inf.
+log_probs = torch.log(F.softmax(logits, dim=-1))
+```
+
+**Fix:** use `F.log_softmax` (or `nn.LogSoftmax`) directly.
+
+```python
+log_probs = F.log_softmax(logits, dim=-1)
+```
+
+**Reference:** PyTorch [`F.log_softmax`](https://pytorch.org/docs/stable/generated/torch.nn.functional.log_softmax.html) is documented as faster and more numerically stable than `log(softmax(x))`.
+
+---
+
+## relu-then-softmax
+
+**Severity:** warn
+
+A `ReLU` placed directly before a `Softmax` (or `LogSoftmax`) clamps every logit
+to be non-negative. Softmax is shift-invariant but **not** clamp-invariant: once
+all logits are `>= 0`, the model can no longer push any class below the others
+by making its logit negative, so low-probability classes are systematically
+inflated and the output distribution is distorted. Softmax is meant to run on
+raw, unbounded logits. This rule fires on the conservative `nn.Sequential(...)`
+adjacency where a `ReLU` is directly followed by a `Softmax` / `LogSoftmax`.
+
+```python
+import torch.nn as nn
+
+classifier = nn.Sequential(
+    nn.Linear(128, 10),
+    nn.ReLU(),          # clamps logits to >= 0
+    nn.Softmax(dim=-1),
+)
+```
+
+**Fix:** drop the `ReLU` and apply the softmax to the raw logits.
+
+```python
+classifier = nn.Sequential(
+    nn.Linear(128, 10),
+    nn.Softmax(dim=-1),
+)
+```
+
+**Reference:** PyTorch [`nn.Softmax`](https://pytorch.org/docs/stable/generated/torch.nn.Softmax.html) operates on unnormalized logits; clamping them first changes the distribution.
+
+---
+
+## view-after-transpose
+
+**Severity:** warn
+
+`.transpose(...)` and `.permute(...)` return a view with non-contiguous memory
+strides. `.view()` requires a contiguous tensor and raises a runtime error
+(`view size is not compatible with input tensor's size and stride ...`) when
+called on that result. The fix is `.reshape()`, which falls back to a copy when
+the tensor is non-contiguous, or an explicit `.contiguous()` before `.view()`.
+This rule flags the directly-chained `x.transpose(...).view(...)` /
+`x.permute(...).view(...)` form.
+
+```python
+# transpose makes x non-contiguous; .view() then raises at runtime.
+y = x.transpose(1, 2).view(x.size(0), -1)
+```
+
+**Fix:** use `.reshape()` (or insert `.contiguous()`).
+
+```python
+y = x.transpose(1, 2).reshape(x.size(0), -1)
+```
+
+**Reference:** PyTorch [`Tensor.view`](https://pytorch.org/docs/stable/generated/torch.Tensor.view.html) requires compatible contiguous strides; [`Tensor.reshape`](https://pytorch.org/docs/stable/generated/torch.Tensor.reshape.html) handles the non-contiguous case.
+
+---
+
+## scheduler-step-before-optimizer
+
+**Severity:** warn
+
+In a PyTorch training loop the optimizer must take its step before the learning
+-rate scheduler. When `scheduler.step()` runs before the first
+`optimizer.step()`, PyTorch emits "Detected call of `lr_scheduler.step()` before
+`optimizer.step()`" and the very first learning-rate value in the schedule is
+skipped (warmup, in particular, then starts one step late). This rule fires when
+the first `scheduler.step()` line precedes the first `optimizer.step()` line in
+the same file.
+
+```python
+for batch, target in loader:
+    optimizer.zero_grad()
+    loss = loss_fn(model(batch), target)
+    loss.backward()
+    scheduler.step()     # WRONG: runs before optimizer.step()
+    optimizer.step()
+```
+
+**Fix:** step the optimizer first, then the scheduler.
+
+```python
+    optimizer.step()
+    scheduler.step()
+```
+
+**Reference:** PyTorch [`torch.optim.lr_scheduler`](https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rate) warns that the scheduler must be stepped after the optimizer.
+
+---
+
+## The other rules
+
+The twenty rules above are the ones reliably detectable from source text with a
+regex. The full [Neurarch](https://neurarch.com) web app adds propagator-based
+checks that need the typed architecture graph rather than raw text:
 
 - full shape-mismatch detection across the whole graph,
 - layer-level GQA introspection (not just the constructor call),
@@ -475,8 +672,8 @@ and the shape propagator and run in the Neurarch web app:
 - cycle detection in the architecture graph,
 - orphan / disconnected-layer detection,
 
-among others. Those run on a real architecture graph rather than source text, so
-they cannot be expressed as a regex here.
+among others. Those run on a real architecture graph, so they cannot be
+expressed as a regex here.
 
 See the complete catalog at <https://neurarch.com/rules.html>, and try the full
 engine at <https://neurarch.com>.

@@ -38,4 +38,4 @@ $ node lint.mjs examples/fixed_transformer.py
 neurarch-lint: no structural issues found.
 ```
 
-Full rationale and the fix for each rule: [../docs/RULES.md](../docs/RULES.md). The full 22-rule engine (including shape propagation) runs in the [Neurarch](https://neurarch.com) web app.
+Full rationale and the fix for each rule: [../docs/RULES.md](../docs/RULES.md). The full engine (including shape propagation) runs in the [Neurarch](https://neurarch.com) web app.

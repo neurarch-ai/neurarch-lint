@@ -521,6 +521,192 @@ const RULES = [
       return findings;
     },
   },
+
+  // R-BCELoss-no-sigmoid: nn.BCELoss with no Sigmoid anywhere in the file.
+  // BCELoss expects probabilities in [0, 1]; without a sigmoid the inputs are
+  // raw logits and the loss is wrong (can go negative). Complement of
+  // sigmoid-bce-with-logits: that one flags sigmoid + BCEWithLogitsLoss; this
+  // one flags BCELoss with NO sigmoid. Does not fire on BCEWithLogitsLoss.
+  {
+    id: 'bceloss-without-sigmoid',
+    title: 'BCELoss fed raw logits (no Sigmoid)',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      // Match nn.BCELoss but not nn.BCEWithLogitsLoss (negative lookahead).
+      const bceRe = /\bnn\.BCELoss\s*\(/;
+      const hasBCELoss = bceRe.test(content);
+      if (!hasBCELoss) return findings;
+      const hasSigmoid =
+        /\bnn\.Sigmoid\s*\(/.test(content) ||
+        /\b(?:torch|F)\.sigmoid\s*\(/.test(content);
+      if (hasSigmoid) return findings;
+      const m = bceRe.exec(content);
+      findings.push({
+        file,
+        line: m ? lineOf(content, m.index) : 1,
+        rule: 'bceloss-without-sigmoid',
+        severity: 'warn',
+        message: 'nn.BCELoss with no Sigmoid in the file. BCELoss expects probabilities in [0, 1]; either add a Sigmoid before the loss, or switch to nn.BCEWithLogitsLoss on raw logits.',
+      });
+      return findings;
+    },
+  },
+
+  // R-log-then-softmax: a manual log() applied to a softmax result. Computing
+  // log(softmax(x)) directly is numerically unstable; F.log_softmax fuses the
+  // two stably. The regex stays tight to the explicit composed forms
+  // (torch.log(F.softmax(...)) and F.softmax(...).log()) to avoid firing on
+  // unrelated logs.
+  {
+    id: 'log-then-softmax',
+    title: 'Manual log on softmax output (use log_softmax)',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      // Form A: torch.log( F.softmax(...) ) / torch.log( torch.softmax(...) ).
+      const wrapRe = /\btorch\.log\s*\(\s*(?:F|torch)\.softmax\s*\(/g;
+      // Form B: F.softmax(x, dim=-1).log() / torch.softmax(...).log().
+      const chainRe = /(?:F|torch)\.softmax\s*\([^)]*\)\s*\.log\s*\(/g;
+      let m;
+      while ((m = wrapRe.exec(content)) !== null) {
+        findings.push({
+          file,
+          line: lineOf(content, m.index),
+          rule: 'log-then-softmax',
+          severity: 'warn',
+          message: 'log(softmax(x)) is numerically unstable. Use F.log_softmax(x, dim=...) which is computed stably.',
+        });
+      }
+      while ((m = chainRe.exec(content)) !== null) {
+        findings.push({
+          file,
+          line: lineOf(content, m.index),
+          rule: 'log-then-softmax',
+          severity: 'warn',
+          message: 'log(softmax(x)) is numerically unstable. Use F.log_softmax(x, dim=...) which is computed stably.',
+        });
+      }
+      return findings;
+    },
+  },
+
+  // R-view-after-transpose: .view() chained directly on a .transpose(...) or
+  // .permute(...) result. After transpose/permute the tensor is non-contiguous
+  // and .view() raises a runtime error; .reshape() (or .contiguous().view())
+  // is safe. Kept to the directly-chained high-precision form.
+  {
+    id: 'view-after-transpose',
+    title: 'view() after transpose/permute (use reshape)',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      // x.transpose(1, 2).view(...) / x.permute(0, 2, 1).view(...). The
+      // balanced single-level arg match ([^()]*) keeps the transpose/permute
+      // arg list from swallowing a nested call.
+      const re = /\.(?:transpose|permute)\s*\([^()]*\)\s*\.view\s*\(/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        findings.push({
+          file,
+          line: lineOf(content, m.index),
+          rule: 'view-after-transpose',
+          severity: 'warn',
+          message: 'view() called on the result of transpose/permute, which is non-contiguous and will raise a runtime error. Use reshape() (or call .contiguous() first).',
+        });
+      }
+      return findings;
+    },
+  },
+
+  // R-scheduler-before-optimizer: a scheduler.step() that appears on an earlier
+  // line than the first optimizer.step(). PyTorch warns this skips the first
+  // learning-rate value and is almost always a training-loop ordering bug.
+  {
+    id: 'scheduler-step-before-optimizer',
+    title: 'lr scheduler.step() before optimizer.step()',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      const lines = content.split('\n');
+      // First var whose name contains 'scheduler' (or lr_scheduler) calling .step().
+      const schedRe = /\b\w*scheduler\w*\s*\.\s*step\s*\(/i;
+      // First var whose name contains 'optimizer' / 'opt' calling .step().
+      const optRe = /\b(?:\w*optimizer\w*|opt)\s*\.\s*step\s*\(/i;
+      let schedLine = -1;
+      let optLine = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (schedLine < 0 && schedRe.test(lines[i])) schedLine = i;
+        if (optLine < 0 && optRe.test(lines[i])) optLine = i;
+      }
+      if (schedLine >= 0 && optLine >= 0 && schedLine < optLine) {
+        findings.push({
+          file,
+          line: schedLine + 1,
+          rule: 'scheduler-step-before-optimizer',
+          severity: 'warn',
+          message: 'scheduler.step() appears before optimizer.step(). PyTorch expects optimizer.step() first; calling the scheduler first skips the initial learning rate. Reorder them.',
+        });
+      }
+      return findings;
+    },
+  },
+
+  // R-relu-then-softmax: a ReLU immediately before a Softmax / LogSoftmax in an
+  // nn.Sequential(...) literal. ReLU clamps logits to non-negative, which
+  // distorts the softmax distribution (it can no longer express low-probability
+  // classes). Conservative Sequential-adjacency form only.
+  {
+    id: 'relu-then-softmax',
+    title: 'ReLU immediately before Softmax/CrossEntropy output',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      // nn.ReLU(...) , (optionally other tokens are NOT allowed) directly
+      // followed by nn.Softmax / nn.LogSoftmax inside a Sequential.
+      const re = /(?:nn\.)?(?:ReLU|ReLU6)\s*\([^)]*\)\s*,\s*(?:nn\.)?(?:Softmax|LogSoftmax)\s*\(/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        findings.push({
+          file,
+          line: lineOf(content, m.index),
+          rule: 'relu-then-softmax',
+          severity: 'warn',
+          message: 'ReLU directly before Softmax/LogSoftmax clamps logits to non-negative and distorts the output distribution. Apply softmax to raw logits (drop the ReLU).',
+        });
+      }
+      return findings;
+    },
+  },
+
+  // R-conv-padding-negative: ConvXd / PoolXd with a negative padding. Negative
+  // padding is invalid and raises at construction. Mirrors conv-stride-zero /
+  // negative-or-zero-kernel; uses extractSignedKwarg to catch padding=-1.
+  {
+    id: 'conv-padding-negative',
+    title: 'Negative padding on Conv/Pool',
+    severity: 'block',
+    check: (content, file) => {
+      const findings = [];
+      const re = /(?:nn\.)?(Conv1d|Conv2d|Conv3d|MaxPool1d|MaxPool2d|MaxPool3d|AvgPool1d|AvgPool2d|AvgPool3d)\s*\(([^)]*)\)/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const cls = m[1];
+        const args = m[2];
+        const padding = extractSignedKwarg(args, ['padding']);
+        if (padding !== null && padding < 0) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'conv-padding-negative',
+            severity: 'block',
+            message: `${cls} has padding=${padding}, which is invalid (padding must be >= 0).`,
+          });
+        }
+      }
+      return findings;
+    },
+  },
 ];
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

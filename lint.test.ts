@@ -100,6 +100,53 @@ const FIXTURES: Array<{ file: string; expect: Expect }> = [
     expect: { expectedRules: ['embedding-zero-size'], exactCount: 1 },
   },
   {
+    file: 'rule_bceloss_without_sigmoid.py',
+    expect: {
+      expectedRules: ['bceloss-without-sigmoid'],
+      // A sigmoid + BCELoss would be correct usage; this fixture has neither
+      // that nor BCEWithLogitsLoss, so sigmoid-bce-with-logits must stay quiet.
+      forbiddenRules: ['sigmoid-bce-with-logits'],
+      exactCount: 1,
+    },
+  },
+  {
+    file: 'rule_log_then_softmax.py',
+    expect: {
+      expectedRules: ['log-then-softmax'],
+      // The softmax here passes dim=-1, so softmax-no-dim must not fire.
+      forbiddenRules: ['softmax-no-dim'],
+      exactCount: 1,
+    },
+  },
+  {
+    file: 'rule_view_after_transpose.py',
+    expect: { expectedRules: ['view-after-transpose'], exactCount: 1 },
+  },
+  {
+    file: 'rule_scheduler_before_optimizer.py',
+    expect: { expectedRules: ['scheduler-step-before-optimizer'], exactCount: 1 },
+  },
+  {
+    file: 'rule_relu_then_softmax.py',
+    expect: {
+      expectedRules: ['relu-then-softmax'],
+      // Softmax has an explicit dim and there is no CrossEntropyLoss, so
+      // neither softmax-no-dim nor softmax-cross-entropy should fire.
+      forbiddenRules: ['softmax-no-dim', 'softmax-cross-entropy'],
+      exactCount: 1,
+    },
+  },
+  {
+    file: 'rule_conv_padding_negative.py',
+    expect: {
+      expectedRules: ['conv-padding-negative'],
+      // kernel_size and stride are valid here, so the sibling Conv rules
+      // must not fire on the negative padding.
+      forbiddenRules: ['conv-stride-zero', 'negative-or-zero-kernel'],
+      exactCount: 1,
+    },
+  },
+  {
     file: 'bad_model.py',
     expect: {
       // Aggregate fixture: 4 rules fire together.

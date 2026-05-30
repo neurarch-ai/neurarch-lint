@@ -252,6 +252,144 @@ const RULES = [
       return findings;
     },
   },
+
+  // R-GroupNorm: num_channels must be divisible by num_groups.
+  // Guaranteed runtime crash at construction, analogous to head_dim.
+  {
+    id: 'groupnorm-channel-divisibility',
+    title: 'GroupNorm num_channels divisibility',
+    severity: 'block',
+    check: (content, file) => {
+      const findings = [];
+      const re = /(?:nn\.)?GroupNorm\s*\(([^)]*)\)/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const args = m[1];
+        // Kwarg form first, then fall back to positional (num_groups, num_channels).
+        const positionalNums = args
+          .split(',')
+          .map(s => s.trim())
+          .filter(s => /^\d+$/.test(s))
+          .map(Number);
+        const groups = extractKwarg(args, ['num_groups', 'numGroups']) ?? positionalNums[0];
+        const channels = extractKwarg(args, ['num_channels', 'numChannels']) ?? positionalNums[1];
+        if (
+          groups !== undefined && groups !== null && groups > 0 &&
+          channels !== undefined && channels !== null &&
+          channels % groups !== 0
+        ) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'groupnorm-channel-divisibility',
+            severity: 'block',
+            message: `GroupNorm has num_channels=${channels}, num_groups=${groups}. num_channels must be divisible by num_groups (${channels} / ${groups} is not an integer).`,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+
+  // R-Sigmoid-BCE: explicit Sigmoid + BCEWithLogitsLoss in same file.
+  // BCEWithLogitsLoss applies sigmoid internally; an explicit sigmoid
+  // double-applies and breaks training. Mirrors softmax-cross-entropy.
+  {
+    id: 'sigmoid-bce-with-logits',
+    title: 'Sigmoid + BCEWithLogitsLoss double-applied',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      const hasExplicitSigmoid =
+        /\bnn\.Sigmoid\s*\(/.test(content) ||
+        /\b(?:torch|F)\.sigmoid\s*\(/.test(content);
+      const hasBCEWithLogits = /\bnn\.BCEWithLogitsLoss\s*\(/.test(content);
+      if (hasExplicitSigmoid && hasBCEWithLogits) {
+        // Approximate the line by finding the first Sigmoid mention.
+        const m = /\b(?:nn\.Sigmoid|(?:torch|F)\.sigmoid)\s*\(/.exec(content);
+        findings.push({
+          file,
+          line: m ? lineOf(content, m.index) : 1,
+          rule: 'sigmoid-bce-with-logits',
+          severity: 'warn',
+          message: 'nn.Sigmoid combined with nn.BCEWithLogitsLoss double-applies the sigmoid. BCEWithLogitsLoss expects raw logits; drop the explicit Sigmoid (or use BCELoss).',
+        });
+      }
+      return findings;
+    },
+  },
+
+  // R-Dropout-range: Dropout probability must be in [0, 1).
+  // p >= 1 zeros the entire signal; p < 0 is invalid.
+  {
+    id: 'dropout-p-range',
+    title: 'Dropout probability out of range',
+    severity: 'block',
+    check: (content, file) => {
+      const findings = [];
+      const re = /(?:nn\.)?(?:Dropout|Dropout1d|Dropout2d|Dropout3d|AlphaDropout|FeatureAlphaDropout)\s*\(([^)]*)\)/g;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const args = m[1];
+        // Kwarg `p=` first, then the first positional float/int.
+        const p = extractFloatKwarg(args, ['p']) ?? firstPositionalFloat(args);
+        if (p !== null && (p >= 1.0 || p < 0)) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'dropout-p-range',
+            severity: 'block',
+            message: `Dropout has p=${p}, which ${p < 0 ? 'is negative and invalid' : 'zeros the entire signal during training'} (p must be in [0, 1)).`,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+
+  // R-Softmax-no-dim: Softmax / LogSoftmax without an explicit dim.
+  // PyTorch warns the implicit dim is ambiguous and deprecated.
+  {
+    id: 'softmax-no-dim',
+    title: 'Softmax without explicit dim',
+    severity: 'warn',
+    check: (content, file) => {
+      const findings = [];
+      // Module form: nn.Softmax( ... ) / nn.LogSoftmax( ... ) with no dim= arg.
+      const moduleRe = /(?:nn\.)?(?:Softmax|LogSoftmax)\s*\(([^)]*)\)/g;
+      let m;
+      while ((m = moduleRe.exec(content)) !== null) {
+        const args = m[1];
+        if (!/\bdim\s*=/.test(args)) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'softmax-no-dim',
+            severity: 'warn',
+            message: 'Softmax called without an explicit dim. The implicit dimension is ambiguous and deprecated; pass dim= (usually dim=-1).',
+          });
+        }
+      }
+      // Functional form: F.softmax(x) / F.log_softmax(x) with a single arg, no dim=.
+      const funcRe = /F\.(?:softmax|log_softmax)\s*\(([^)]*)\)/g;
+      while ((m = funcRe.exec(content)) !== null) {
+        const args = m[1];
+        if (/\bdim\s*=/.test(args)) continue;
+        // Only flag the single-argument form; multi-arg calls may pass dim positionally.
+        const argCount = args.split(',').map(s => s.trim()).filter(s => s.length > 0).length;
+        if (argCount === 1) {
+          findings.push({
+            file,
+            line: lineOf(content, m.index),
+            rule: 'softmax-no-dim',
+            severity: 'warn',
+            message: 'Softmax called without an explicit dim. The implicit dimension is ambiguous and deprecated; pass dim= (usually dim=-1).',
+          });
+        }
+      }
+      return findings;
+    },
+  },
 ];
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -263,6 +401,24 @@ function extractKwarg(args, keys) {
     if (m) return parseInt(m[1], 10);
   }
   return null;
+}
+
+// Float-aware sibling of extractKwarg: returns a float (or null) for `key=1.0`.
+function extractFloatKwarg(args, keys) {
+  for (const k of keys) {
+    const re = new RegExp(`\\b${k}\\s*=\\s*(-?\\d*\\.?\\d+)`);
+    const m = re.exec(args);
+    if (m) return parseFloat(m[1]);
+  }
+  return null;
+}
+
+// First bare positional numeric argument as a float (skips kwargs), or null.
+function firstPositionalFloat(args) {
+  const first = args.split(',')[0]?.trim() ?? '';
+  if (first.includes('=')) return null; // leading arg is a kwarg, not positional
+  const m = /^(-?\d*\.?\d+)$/.exec(first);
+  return m ? parseFloat(m[1]) : null;
 }
 
 function lineOf(content, offset) {

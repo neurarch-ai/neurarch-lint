@@ -1,7 +1,7 @@
 {
   "name": "neurarch-lint",
   "version": "1.0.0",
-  "description": "Pre-flight structural lint for PyTorch models. Catches attention head_dim divisibility, GQA head ratio, Softmax + CrossEntropyLoss double-apply, and zero-dim layers before training.",
+  "description": "Pre-flight structural lint for PyTorch models. Catches attention head_dim divisibility, GQA head ratio, GroupNorm channel divisibility, Softmax + CrossEntropyLoss double-apply, and zero-dim layers before training.",
   "type": "module",
   "bin": {
     "neurarch-lint": "lint.mjs"

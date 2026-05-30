@@ -52,6 +52,32 @@ const FIXTURES: Array<{ file: string; expect: Expect }> = [
     expect: { expectedRules: ['deep-no-residual'], exactCount: 1 },
   },
   {
+    file: 'rule_groupnorm.py',
+    expect: { expectedRules: ['groupnorm-channel-divisibility'], exactCount: 1 },
+  },
+  {
+    file: 'rule_sigmoid_bce.py',
+    expect: {
+      expectedRules: ['sigmoid-bce-with-logits'],
+      // The sigmoid head must not be mistaken for a softmax-no-dim hit.
+      forbiddenRules: ['softmax-no-dim'],
+      exactCount: 1,
+    },
+  },
+  {
+    file: 'rule_dropout_range.py',
+    expect: { expectedRules: ['dropout-p-range'], exactCount: 1 },
+  },
+  {
+    file: 'rule_softmax_no_dim.py',
+    expect: {
+      expectedRules: ['softmax-no-dim'],
+      // No CrossEntropyLoss here, so softmax-cross-entropy must stay quiet.
+      forbiddenRules: ['softmax-cross-entropy'],
+      exactCount: 1,
+    },
+  },
+  {
     file: 'bad_model.py',
     expect: {
       // Aggregate fixture: 4 rules fire together.

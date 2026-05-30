@@ -20,6 +20,31 @@ It runs in CI on every pull request, reads the `.py` files that changed, and blo
 
 Style and type linters check syntax and types. They happily pass a model whose attention `embed_dim` isn't divisible by `num_heads`, or that applies `Softmax` right before `CrossEntropyLoss`. neurarch-lint checks the **tensor structure**, the class of bug that only surfaces once you actually run the model (or worse, halfway through training).
 
+### Example
+
+When the action finds something, it posts a comment like this on the pull request (this is the `--markdown` output, the same text the CLI prints locally):
+
+> ### neurarch-lint
+>
+> Found **3** structural issues in this PR:
+>
+> :no_entry: **head-dim-divisibility** (block)
+>   `models/encoder.py:18`
+>   MultiheadAttention has embed_dim=384, num_heads=5. head_dim would be 76.80 (must be an integer).
+>
+> :no_entry: **groupnorm-channel-divisibility** (block)
+>   `models/encoder.py:24`
+>   GroupNorm has num_channels=16, num_groups=3. num_channels must be divisible by num_groups (16 / 3 is not an integer).
+>
+> :warning: **softmax-no-dim** (warn)
+>   `models/head.py:9`
+>   Softmax called without an explicit dim. The implicit dimension is ambiguous and deprecated; pass dim= (usually dim=-1).
+>
+> ---
+> Full rule reference: <https://neurarch.com/rules.html>
+
+The two `block` findings fail the check (exit code `1`); the `warn` is informational unless you set `fail-on-warn: true`.
+
 ## What it catches (v1)
 
 | Rule | Severity | Trigger |
@@ -30,8 +55,12 @@ Style and type linters check syntax and types. They happily pass a model whose a
 | `zero-features` | block | `nn.Linear(0, 10)` or `Conv2d(in_channels=0, ...)`. Fails at construction. |
 | `bn-after-activation` | warn | A `BatchNormXd` / `LayerNorm` / `InstanceNorm` / `GroupNorm` / `RMSNorm` call wired right after an activation in `forward()`. Norm should be before the activation (Ioffe & Szegedy 2015). |
 | `deep-no-residual` | warn | >= 8 weight-carrying layers (Linear / ConvXd / MultiheadAttention) and zero residual signals. Gradient signal degrades without skips (He et al. 2015). |
+| `groupnorm-channel-divisibility` | block | `nn.GroupNorm(3, 16)`. `num_channels` must be divisible by `num_groups` or construction crashes. |
+| `sigmoid-bce-with-logits` | warn | `nn.Sigmoid` + `nn.BCEWithLogitsLoss` in the same file. BCEWithLogitsLoss applies sigmoid internally; explicit Sigmoid double-applies. |
+| `dropout-p-range` | block | `nn.Dropout(p=1.0)` (or any `p >= 1` / `p < 0`). `p >= 1` zeros the whole signal; `p` must be in `[0, 1)`. |
+| `softmax-no-dim` | warn | `nn.Softmax()` / `F.softmax(x)` with no explicit `dim`. The implicit dimension is ambiguous and deprecated. |
 
-The full Neurarch rule set is 22 checks (5 guardrail gates + 17 advisor rules). v1 of this action covers the 6 most regex-detectable ones. The propagator-based checks (full shape mismatch, layer-level GQA introspection) live in the [Neurarch](https://neurarch.com) web app and are on the roadmap for a v2 action that bundles the typed-graph parser.
+The full Neurarch rule set is 22 checks (5 guardrail gates + 17 advisor rules). v1 of this action covers the 10 most regex-detectable ones. The propagator-based checks (full shape mismatch, layer-level GQA introspection) live in the [Neurarch](https://neurarch.com) web app and are on the roadmap for a v2 action that bundles the typed-graph parser.
 
 Full rule catalog: <https://neurarch.com/rules.html>
 

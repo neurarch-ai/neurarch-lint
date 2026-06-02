@@ -1,0 +1,12 @@
+[
+  { "name": "vit-pytorch",        "url": "https://github.com/lucidrains/vit-pytorch",        "ref": "main" },
+  { "name": "nanoGPT",            "url": "https://github.com/karpathy/nanoGPT",              "ref": "master" },
+  { "name": "minGPT",             "url": "https://github.com/karpathy/minGPT",               "ref": "master" },
+  { "name": "annotated-dl",       "url": "https://github.com/labmlai/annotated_deep_learning_paper_implementations", "ref": "master" },
+  { "name": "pytorch-image-models","url": "https://github.com/huggingface/pytorch-image-models","ref": "main", "paths": ["timm/models"] },
+  { "name": "x-transformers",     "url": "https://github.com/lucidrains/x-transformers",      "ref": "main" },
+  { "name": "DALLE2-pytorch",     "url": "https://github.com/lucidrains/DALLE2-pytorch",      "ref": "main" },
+  { "name": "PyTorch-GAN",        "url": "https://github.com/eriklindernoren/PyTorch-GAN",    "ref": "master" },
+  { "name": "pytorch-tutorial",   "url": "https://github.com/yunjey/pytorch-tutorial",        "ref": "master" },
+  { "name": "deep-learning-v2",   "url": "https://github.com/udacity/deep-learning-v2-pytorch","ref": "master" }
+]

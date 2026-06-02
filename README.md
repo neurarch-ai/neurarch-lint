@@ -5,9 +5,9 @@
 [![GitHub stars](https://img.shields.io/github/stars/neurarch-ai/neurarch-lint.svg?style=social)](https://github.com/neurarch-ai/neurarch-lint/stargazers)
 [![Try Neurarch](https://img.shields.io/badge/Neurarch-try_it-7c3aed)](https://neurarch.com)
 
-**Your AI model is a blueprint, not a wall of text. We help the computer read it that way.**
+**Catch the shape and config bugs that blow up 40 minutes into GPU training, in CI, before you pay for the GPU.**
 
-Pre-flight structural lint for PyTorch models. Catches the shape and config bugs `ruff` and `mypy` can't, the ones that survive the text layer and only surface at runtime (or worse, a GPU hour into training).
+Pre-flight structural lint for PyTorch models. It reads the model's *structure*, not its text, so it catches the class of bug `ruff` and `mypy` pass clean: an attention layer whose `embed_dim` isn't divisible by `num_heads`, a `GroupNorm` whose channels don't divide, a `Softmax` right before `CrossEntropyLoss`. The bugs that survive the text layer and only surface at runtime (or worse, a GPU hour into training).
 
 Cursor and Copilot read your model as text, so they guess at tensor shapes and get them wrong. neurarch-lint reads the **structure**: it reasons about your architecture instead of pattern-matching strings.
 

@@ -78,7 +78,10 @@ runs:
         fi
 
     - name: Comment on PR
-      if: inputs.comment-on-pr == 'true' && github.event.pull_request.number
+      # always(): the lint step exits 1 on a blocker, which is exactly when there
+      # is something to post. Without it this step was skipped on every failing
+      # PR and ran only on clean ones (found on model-ci-example#1, 2026-09-02).
+      if: always() && inputs.comment-on-pr == 'true' && github.event.pull_request.number && steps.lint.outputs.count != '0' && steps.lint.outputs.count != ''
       uses: actions/github-script@v7
       with:
         script: |

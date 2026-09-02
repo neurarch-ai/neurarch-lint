@@ -64,8 +64,11 @@ runs:
         # regardless of exit code; the real exit logic stays on the human run).
         node "${{ github.action_path }}/lint.mjs" $FILES || LINT_EXIT=$?
         node "${{ github.action_path }}/lint.mjs" --github $FILES || true
-        node "${{ github.action_path }}/lint.mjs" --markdown $FILES > /tmp/neurarch-lint.md
-        node "${{ github.action_path }}/lint.mjs" --json $FILES > /tmp/neurarch-lint.json
+        # The shell runs with -e: without || true, a blocker's exit 1 here aborted
+        # the step before count/blockers were written, so the comment never had
+        # anything to read.
+        node "${{ github.action_path }}/lint.mjs" --markdown $FILES > /tmp/neurarch-lint.md || true
+        node "${{ github.action_path }}/lint.mjs" --json $FILES > /tmp/neurarch-lint.json || true
         COUNT=$(jq '.findings | length' /tmp/neurarch-lint.json)
         BLOCKERS=$(jq '[.findings[] | select(.severity=="block")] | length' /tmp/neurarch-lint.json)
         echo "count=$COUNT" >> $GITHUB_OUTPUT
